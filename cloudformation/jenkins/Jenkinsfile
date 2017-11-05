@@ -1,0 +1,56 @@
+stage name: 'Compile'
+node {
+    sh 'echo Compile'
+}
+
+stage name: 'Unit Test'
+node {
+    sh 'echo Unit Test'
+}
+
+stage name: 'Integration Test'
+node {
+    sh 'echo Unit Test'
+}
+
+stage name: 'Build Docker'
+node {
+    sh 'echo Build Docker'
+}
+
+stage name: 'Staging Deploy'
+node {
+    sh 'echo Staging Deploy'
+}
+
+stage name: 'Staging Smoke Tests'
+node {
+    sh 'echo Staging Smoke Tests'
+}
+
+stage name: 'Staging QA Tests', concurrency:1
+node {
+    sh 'echo Staging Smoke Tests'
+}
+
+stage name: 'Prod Deploy'
+input 'Deploy code to Production?'
+node {
+    sh 'echo Production Deploy'
+}
+
+stage name: 'Prod Smoke Tests'
+node {
+    sh 'echo Production Smoke Tests'
+}
+
+stage name: 'Prod QA Tests', concurrency:1
+node {
+    sh 'echo Production Smoke Tests'
+}
+
+stage name: 'Bump Version'
+node {
+    sh 'echo Bump Version'
+}
+

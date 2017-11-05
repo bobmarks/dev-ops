@@ -1,0 +1,793 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  AWS CloudFormation Sample Template Create a load balanced Jenkins CI server
+  with Docker installed. The application is using CloudWatch logs **WARNING**
+  This template creates an Amazon EC2 instance in an Autoscaling group. You will
+  be billed for the AWS resources used if you create a stack from this template.
+
+#=========================================================================
+# 1) Parameters
+#=========================================================================
+
+Parameters:
+
+  InstanceType:
+    Description: WebServer EC2 instance type
+    Type: String
+    Default: t2.small
+    AllowedValues:
+      - t1.micro
+      - t2.micro
+      - t2.small
+      - t2.medium
+      - t2.large
+      - m3.medium
+      - m3.large
+      - m3.xlarge
+      - m3.2xlarge
+      - c3.large
+      - c3.xlarge
+      - c3.2xlarge
+      - c3.4xlarge
+      - c3.8xlarge
+      - c4.large
+      - c4.xlarge
+      - c4.2xlarge
+      - c4.4xlarge
+      - c4.8xlarge
+      - r3.large
+      - r3.xlarge
+      - r3.2xlarge
+      - r3.4xlarge
+      - r3.8xlarge
+      - i2.xlarge
+      - i2.2xlarge
+      - i2.4xlarge
+      - i2.8xlarge
+      - hi1.4xlarge
+      - hs1.8xlarge
+      - cr1.8xlarge
+      - cc2.8xlarge
+    ConstraintDescription: must be a valid EC2 instance type.
+  
+  KeyName:
+    Description: The EC2 Key Pair to allow SSH access to the instances
+    Type: 'AWS::EC2::KeyPair::KeyName'
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+  
+  VpcId:
+    Description: The VPC Id to create the Security Group in.
+    Type: 'AWS::EC2::VPC::Id'
+    ConstraintDescription: must be the name of an existing VPC.
+    Default: vpc-aa2376cd
+  
+  SSHLocation:
+    Description: The IP address range that can be used to SSH to the EC2 instances
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    Default: 0.0.0.0/0
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x.
+  
+  PublicSubnets:
+    Description: Subnet to deploy the ELB and Instances into
+    Type: 'List<AWS::EC2::Subnet::Id>'
+    ConstraintDescription: Must be a valid VPC Subnet.
+    Default: subnet-8b1e9dd0
+  
+  ElasticIpAllocationId:
+    Description: >-
+      Allocation id of an Elastic IP to associate Jenkins build server with.  If
+      blank, no association is performed.
+    Type: String
+    ConstraintDescription: Must be a valid Allocation Id of an Elastic IP
+    Default: eipalloc-1cb3bf26
+  
+  S3Bucket:
+    Description: Existing S3 bucket to use for Jenkins backups and restores
+    Type: String
+    Default: com.jenkins.backups
+  
+  S3Prefix:
+    Description: '[Optional] Key prefix to use for Jenkins backups'
+    Type: String
+    Default: ''
+  
+  VolumeSize:
+    Description: Volume size for the root volume (default 100)
+    Type: Number
+    Default: '8'
+
+#=========================================================================
+# 2) Mappings
+#=========================================================================
+
+Mappings:
+  AWSInstanceType2Arch:
+    t1.micro:
+      Arch: PV64
+    t2.micro:
+      Arch: HVM64
+    t2.small:
+      Arch: HVM64
+    t2.medium:
+      Arch: HVM64
+    t2.large:
+      Arch: HVM64
+    m3.medium:
+      Arch: HVM64
+    m3.large:
+      Arch: HVM64
+    m3.xlarge:
+      Arch: HVM64
+    m3.2xlarge:
+      Arch: HVM64
+    c3.large:
+      Arch: HVM64
+    c3.xlarge:
+      Arch: HVM64
+    c3.2xlarge:
+      Arch: HVM64
+    c3.4xlarge:
+      Arch: HVM64
+    c3.8xlarge:
+      Arch: HVM64
+    c4.large:
+      Arch: HVM64
+    c4.xlarge:
+      Arch: HVM64
+    c4.2xlarge:
+      Arch: HVM64
+    c4.4xlarge:
+      Arch: HVM64
+    c4.8xlarge:
+      Arch: HVM64
+    r3.large:
+      Arch: HVM64
+    r3.xlarge:
+      Arch: HVM64
+    r3.2xlarge:
+      Arch: HVM64
+    r3.4xlarge:
+      Arch: HVM64
+    r3.8xlarge:
+      Arch: HVM64
+    i2.xlarge:
+      Arch: HVM64
+    i2.2xlarge:
+      Arch: HVM64
+    i2.4xlarge:
+      Arch: HVM64
+    i2.8xlarge:
+      Arch: HVM64
+    hi1.4xlarge:
+      Arch: HVM64
+    hs1.8xlarge:
+      Arch: HVM64
+    cr1.8xlarge:
+      Arch: HVM64
+    cc2.8xlarge:
+      Arch: HVM64
+  AWSRegionArch2AMI:
+    us-east-1:
+      PV64: ami-1ccae774
+      HVM64: ami-1ecae776
+    us-west-2:
+      PV64: ami-ff527ecf
+      HVM64: ami-e7527ed7
+    us-west-1:
+      PV64: ami-d514f291
+      HVM64: ami-d114f295
+    eu-west-1:
+      PV64: ami-bf0897c8
+      HVM64: ami-a10897d6
+    eu-central-1:
+      PV64: ami-ac221fb1
+      HVM64: ami-a8221fb5
+    ap-northeast-1:
+      PV64: ami-acd9e8fe
+      HVM64: ami-68d8e93a
+    ap-southeast-1:
+      PV64: ami-27f90e27
+      HVM64: ami-cbf90ecb
+    ap-southeast-2:
+      PV64: ami-ff9cecc5
+      HVM64: ami-fd9cecc7
+    sa-east-1:
+      PV64: ami-fd9925e0
+      HVM64: ami-b52890a8
+
+#=========================================================================
+# 3) Resurces
+#=========================================================================
+
+Resources:
+
+  #----------------
+  # 3.1) Log group
+  #----------------
+
+  CloudFormationLogs:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      RetentionInDays: 7
+
+  #-------------------
+  # 3.2) Jenkins Role
+  #-------------------
+
+  JenkinsRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: JenkinsRolePolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:*'
+                Resource:
+                  - 'arn:aws:logs:*:*:*'
+              - Effect: Allow
+                Action:
+                  - 'iam:*'
+                  - 'ecs:*'
+                  - 'ecr:*'
+                  - 's3:*'
+                  - 'cloudwatch:*'
+                  - 'ec2:*'
+                  - 'ecs:*'
+                  - 'autoscaling:*'
+                  - 'elasticbeanstalk:*'
+                  - 'rds:*'
+                  - 'cloudformation:*'
+                  - 'elasticloadbalancing:*'
+                Resource: '*'
+  
+  #-------------------------------
+  # 3.3) Jenkins Instance Profile
+  #-------------------------------
+
+  JenkinsInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Path: /
+      Roles:
+        - !Ref JenkinsRole
+
+  #-------------------
+  # 3.4) Jenkins User
+  #-------------------
+
+  JenkinsUser:
+    Type: 'AWS::IAM::User'
+    Properties:
+      Path: /
+      Policies:
+        - PolicyName: AssociateAddressPolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ec2:AllocateAddress'
+                  - 'ec2:AssociateAddress'
+                  - 'ec2:DescribeAddresses'
+                  - 'ec2:DisassociateAddress'
+                Resource:
+                  - '*'
+        - PolicyName: S3Access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: 's3:*'
+                Resource: !Join 
+                  - ''
+                  - - 'arn:aws:s3:::'
+                    - !Ref S3Bucket
+                    - /*
+        - PolicyName: IAMAccess
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                NotAction: 'iam:*'
+                Resource: '*'
+
+  #------------------
+  # 3.5) Access Keys
+  #------------------
+
+  CfnKeys:
+    Type: 'AWS::IAM::AccessKey'
+    Properties:
+      UserName: !Ref JenkinsUser
+
+  #-------------------------
+  # 3.6) Auto-scaling group
+  #-------------------------
+
+  WebServerGroup:
+    Type: 'AWS::AutoScaling::AutoScalingGroup'
+    Properties:
+      VPCZoneIdentifier: !Ref PublicSubnets
+      LaunchConfigurationName: !Ref LaunchConfig
+      MinSize: '1'
+      MaxSize: '1'
+      Tags:
+        - Key: Name
+          Value: Jenkins
+          PropagateAtLaunch: 'true'
+
+  #---------------------------
+  # 3.7) Launch configuration
+  #---------------------------
+
+  LaunchConfig:
+    Type: 'AWS::AutoScaling::LaunchConfiguration'
+    Metadata:
+      Comment: Install a simple application
+      AWS::CloudFormation::Init:
+
+        configSets:
+          install_all:
+            - metric_uploading_config
+            - install_cfn
+            - install_base
+            - install_nginx
+            - install_logs
+            - install_s3_backups
+
+        metric_uploading_config:
+          packages:
+            yum:
+              perl-Sys-Syslog: []
+              perl-Switch: []
+              perl-URI: []
+              perl-IO-Compress: []
+              perl-Bundle-LWP: []
+          sources:
+            /home/ec2-user: >-
+              http://ec2-downloads.s3.amazonaws.com/cloudwatch-samples/CloudWatchMonitoringScripts-v1.1.0.zip
+          files:
+            /home/ec2-user/crontab:
+              content: >
+                */1 * * * * ~/aws-scripts-mon/mon-put-instance-data.pl 
+                --aws-iam-role=JenkinsRole --mem-used --memory-units=megabytes
+                --mem-util --disk-space-util --disk-space-used --disk-space-avail
+                --disk-path=/
+              mode: '000600'
+              owner: ec2-user
+              group: ec2-user
+          commands:
+            01_YumUpdateMonitoring:
+              command: yum update -y
+            02_MonitoringCron:
+              command: >-
+                chmod +x /home/ec2-user/aws-scripts-mon/*.pl && crontab -u
+                ec2-user /home/ec2-user/crontab && rm /home/ec2-user/crontab
+        
+        install_cfn:
+          files:
+            /etc/cfn/cfn-hup.conf:
+              content: !Sub |
+                [main]
+                stack=${AWS::StackId}
+                region=${AWS::Region}
+
+              mode: '000400'
+              owner: root
+              group: root
+            /etc/cfn/hooks.d/cfn-auto-reloader.conf:
+              content: !Sub |
+                [cfn-auto-reloader-hook]
+                triggers=post.update
+                path=Resources.WebServerInstance.Metadata.AWS::CloudFormation::Init
+                action=/opt/aws/bin/cfn-init -v --stack ${AWS::StackId} --resource WebServerInstance --configsets install_all --region --region ${AWS::Region}
+                runas=root
+          services:
+            sysvinit:
+              cfn-hup:
+                enabled: 'true'
+                ensureRunning: 'true'
+                files:
+                  - /etc/cfn/cfn-hup.conf
+                  - /etc/cfn/hooks.d/cfn-auto-reloader.conf
+
+        install_base:
+          packages:
+            yum:
+              git: []
+              docker: []
+              httpd-tools: []
+            python:
+              awscli: []
+          files:
+            /etc/aws.conf:
+              content: !Sub |
+                [default]\n"
+                aws_access_key_id={{access_key}}
+                aws_secret_access_key={{secret_key}}
+                region=${AWS::Region}
+
+              context:
+                access_key: !Ref CfnKeys
+                secret_key: !GetAtt 
+                  - CfnKeys
+                  - SecretAccessKey
+              mode: '000700'
+              owner: root
+              group: root
+          services:
+            sysvinit:
+              docker:
+                enabled: 'true'
+                ensureRunning: 'true'
+
+        install_nginx:
+          packages:
+            yum:
+              nginx: []
+          files:
+            /etc/nginx/nginx.conf:
+              content: !Sub |
+                user  nginx;
+                worker_processes  1;
+                error_log  /var/log/nginx/error.log;
+                pid        /var/run/nginx.pid;
+                
+                events {
+                    worker_connections  1024;
+                }
+
+                http {
+                    include       /etc/nginx/mime.types;
+                    default_type  application/octet-stream;
+                    log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                                      '$status $body_bytes_sent "$http_referer" '
+                                      '"$http_user_agent" "$http_x_forwarded_for" '
+
+                    access_log  /var/log/nginx/access.log  main;
+                    sendfile        on;
+                    keepalive_timeout  65;
+                    include /etc/nginx/conf.d/*.conf;
+                    index   index.html index.htm;
+                    server {
+                      listen       80;
+                      server_name  _;
+                      location / {
+                        proxy_pass              http://127.0.0.1:8080;
+                        proxy_set_header        Host $host;
+                        proxy_set_header        X-Real-IP $remote_addr;
+                        proxy_set_header        X-Forwarded-For $proxy_add_x_forwarded_for;
+                        proxy_connect_timeout   150;
+                        proxy_send_timeout      100;
+                        proxy_read_timeout      100;
+                        proxy_buffers           4 32k;
+                        client_max_body_size    8m;
+                        client_body_buffer_size 128k;
+                      }
+                   }
+                }
+              mode: '000444'
+              owner: root
+              group: root
+          services:
+            sysvinit:
+              nginx:
+                enabled: 'true'
+                ensureRunning: 'true'
+                files:
+                  - /etc/nginx/nginx.conf
+
+        install_logs:
+          packages:
+            yum:
+              awslogs: []
+          files:
+            /etc/awslogs/awslogs.conf:
+              content: !Sub |
+                [general]
+                state_file= /var/awslogs/state/agent-state
+
+                [/var/log/cloud-init.log]
+                file = /var/log/cloud-init.log
+                log_group_name = ${CloudFormationLogs}
+                log_stream_name = {instance_id}/cloud-init.log
+                datetime_format = 
+
+                [/var/log/cloud-init-output.log]
+                file = /var/log/cloud-init-output.log\
+                log_group_name = ${CloudFormationLogs}
+                log_stream_name = {instance_id}/cloud-init-output.log
+                datetime_format = 
+
+                [/var/log/cfn-init.log]
+                file = /var/log/cfn-init.log
+                log_group_name = ${CloudFormationLogs}
+                log_stream_name = {instance_id}/cfn-init.log
+                datetime_format = 
+
+                [/var/log/cfn-hup.log]
+                file = /var/log/cfn-hup.log
+                log_group_name = ${CloudFormationLogs}
+                log_stream_name = {instance_id}/cfn-hup.log
+                datetime_format = 
+
+                [/var/log/cfn-wire.log]
+                file = /var/log/cfn-wire.log
+                log_group_name = ${CloudFormationLogs}
+                log_stream_name = {instance_id}/cfn-wire.log
+                datetime_format = 
+
+                [/var/log/nginx/access.log]
+                file = /var/log/nginx/access.log
+                log_group_name = ${CloudFormationLogs}
+                log_stream_name = {instance_id}/nginx-access.log
+                datetime_format = 
+
+                [/var/log/nginx/error.log]
+                file = /var/log/nginx/error.log
+                log_group_name = ${CloudFormationLogs}
+                log_stream_name = {instance_id}/nginx-error.log
+                datetime_format = 
+
+                [/var/log/jenkins/jenkins.log]
+                file = /var/log/jenkins/jenkins.log
+                log_group_name = ${CloudFormationLogs}
+                log_stream_name = {instance_id}/jenkins.log
+                datetime_format =               
+              mode: '000444'
+              owner: root
+              group: root
+          commands:
+            01_create_state_directory:
+              command: mkdir -p /var/awslogs/state
+            02_change_log_region:
+              command: !Sub sed -i 's/region = us-east-1/region = ${AWS::Region}/g' /etc/awslogs/awscli.conf
+          services:
+            sysvinit:
+              awslogs:
+                enabled: 'true'
+                ensureRunning: 'true'
+                files:
+                  - /etc/awslogs/awslogs.conf
+
+        install_s3_backups:
+          files:
+
+            /usr/local/bin/jenkins-restore:
+              content: |
+                #!/bin/bash -e
+
+                USAGE="Usage: $0 S3_TARGET JENKINS_HOME\n
+                \n
+                Example:\n
+                    $0 s3://mybucket/jenkins/jenkins-201405011901.tar.gz /var/lib/jenkins\n
+                \n
+                If S3_TARGET is a directory, restore from the newest file.\n
+                Make sure to include the trailing slash:\n
+                \n
+                    $0 s3://mybucket/jenkins/ /var/lib/jenkins"
+
+                S3_TARGET=$1
+                JENKINS_HOME=$2
+                if [[ -z "`echo $S3_TARGET|grep '^s3://'`" ]]; then
+                    echo -e $USAGE
+                    exit 1
+                fi
+
+                if [[ -z "`aws s3 ls $S3_TARGET`" ]]; then
+                    echo "No backups currently saved in $S3_TARGET"
+                    exit -1
+                fi
+
+                if [[ "$S3_TARGET" == */ ]]; then
+                    S3_TARGET=$S3_TARGET`aws s3 ls $S3_TARGET|tail -1|awk '{print $NF}'`
+                fi
+
+                LOCAL_BACKUP=/tmp/`basename $S3_TARGET`
+                aws s3 cp $S3_TARGET $LOCAL_BACKUP
+
+                if [[ -d "$JENKINS_HOME" ]]; then
+                    rm -rf $JENKINS_HOME
+                fi
+
+                mkdir -p $JENKINS_HOME
+                tar zxf $LOCAL_BACKUP -C $JENKINS_HOME
+                rm -f $LOCAL_BACKUP
+              mode: '000755'
+              owner: root
+              group: root
+
+            /usr/local/bin/jenkins-backup:
+              content: |
+                USAGE="Usage: $0 JENKINS_HOME S3_TARGET\n
+                \n
+                Examples:\n
+                    $0 /var/lib/jenkins s3://mybucket/jenkins/jenkins-201405011901.tar.gz\n"
+                
+                JENKINS_HOME=$1
+                S3_TARGET=$2
+                if [[ -z "`echo $S3_TARGET|grep '^s3://'`" || ! -d "$JENKINS_HOME" ]]; then
+                   echo -e $USAGE
+                    exit 1
+                fi
+                
+                LOCAL_BACKUP=/tmp/`basename $S3_TARGET`
+                
+                tar -C $JENKINS_HOME -zcf $LOCAL_BACKUP .\
+                    --exclude "config-history/" \
+                    --exclude "config-history/*" \
+                    --exclude "jobs/*/workspace*" \
+                    --exclude "jobs/*/builds/*/archive" \
+                    --exclude ".m2/repository" \
+                    --exclude "plugins/*.bak" \
+                    --exclude "war" \
+                    --exclude "workspace" \
+                    --exclude "cache"
+                
+                aws s3 cp $LOCAL_BACKUP $S3_TARGET
+                rm -f $LOCAL_BACKUP
+              mode: '000755'
+              owner: root
+              group: root
+
+            /etc/cron.d/jenkins:
+              content: |                
+                AWS_CONFIG_FILE=/etc/aws.conf
+                PATH=/bin:/usr/bin::/usr/local/bin
+                59 0 * * * root jenkins-backup /var/lib/jenkins s3://{{s3_bucket}}/{{s3_prefix}}jenkins-`date +\%Y\%m\%d\%H\%M.tar.gz` >> /var/log/jenkins-backup.log 2>&1
+
+              context:
+                s3_bucket: !Ref S3Bucket
+                s3_prefix: !Ref S3Prefix
+              mode: '000644'
+              owner: root
+              group: root
+
+    Properties:
+      KeyName: !Ref KeyName
+      ImageId: !FindInMap 
+        - AWSRegionArch2AMI
+        - !Ref 'AWS::Region'
+        - !FindInMap 
+          - AWSInstanceType2Arch
+          - !Ref InstanceType
+          - Arch
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: !Ref VolumeSize
+            VolumeType: gp2
+      SecurityGroups:
+        - !Ref InstanceSecurityGroup
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref JenkinsInstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+
+          yum update -y aws-cfn-bootstrap
+          
+          ## Error reporting helper function
+          function error_exit
+          {
+             /opt/aws/bin/cfn-signal \
+                 --exit-code 1 \
+                 --reason "$1" '${WaitHandleJenkins}'
+             exit 1
+          }
+          
+          # Initialize CloudFormation
+          /opt/aws/bin/cfn-init -v \
+              --stack ${AWS::StackName} \
+              --resource LaunchConfig \
+              --configsets install_all \
+              --region ${AWS::Region} \
+            > /tmp/cfn-init.log 2>&1 || error_exit $(</tmp/cfn-init.log)
+          
+          # Upgrade Java
+          sudo yum install -y java-1.8.0
+          sudo yum remove -y java-1.7.0-openjdk
+          
+          # Install Jenkins
+          wget -O /etc/yum.repos.d/jenkins.repo http://pkg.jenkins-ci.org/redhat-stable/jenkins.repo
+          rpm --import https://jenkins-ci.org/redhat/jenkins-ci.org.key
+          yum update -y jenkins
+          yum install -y jenkins
+          yum install -y jq
+          
+          # Add Jenkins user to Docker group
+          usermod -a -G docker jenkins
+          service jenkins start
+          chkconfig jenkins on
+          
+          # Add jenkins user to sudoers and disable tty
+          echo "jenkins ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+          echo "Defaults:%jenkins !requiretty" >> /etc/sudoers
+          echo "Defaults:jenkins !requiretty" >> /etc/sudoers
+          
+          # Add docker compose
+          curl -L https://github.com/docker/compose/releases/download/1.8.0/docker-compose-`uname -s`-`uname -m` > /usr/local/bin/docker-compose
+          chmod +x /usr/local/bin/docker-compose
+          
+          # Update the AWS CLI to the latest version and set environment variable
+          export AWS_CONFIG_FILE=/etc/aws.conf
+          yum update -y aws-cli
+          
+          # Update ElasticIP (if parameter is set) to point to this server as we're in a min=1, max=1 autoscaling group
+          ELASTIC_IP_ALLOCATION_ID=${ElasticIpAllocationId}
+          if [ "$ELASTIC_IP_ALLOCATION_ID" != '' ] ; then
+              aws ec2 associate-address --region ${AWS::Region} \
+                  --instance `curl http://169.254.169.254/latest/meta-data/instance-id` \
+                  --allocation-id $ELASTIC_IP_ALLOCATION_ID \
+                  --allow-reassociation || true ; 
+          fi
+          
+          # Set hostname
+          hostname `curl http://169.254.169.254/latest/meta-data/local-ipv4`
+          
+          # Wait 30 seconds to allow Jenkins to startup (could improve this with an implicit wait)
+          echo "Waiting 30 seconds for Jenkins to start....."
+          sleep 30
+          
+          # Handle case where cron doesn't detect the new /etc/cron.d file
+          service crond restart
+          
+          # Increase ulimit
+          ulimit -n 3072
+          
+          # Set jenkins memory to 1GB
+          sed -i -e 's/-Djava.awt.headless=true/-Djava.awt.headless=true -Xms1g -Xmx1g/g' /etc/sysconfig/jenkins
+          
+          # Attempt to restore from backup
+          /usr/local/bin/jenkins-restore s3://com.jenkins.backups/ /var/lib/jenkins || true # ignore errors
+          
+          # Restarting Jenkins
+          service jenkins restart
+          
+          ## CloudFormation signal that setup is complete
+          /opt/aws/bin/cfn-signal \
+              --exit-code 0 \
+              --reason "Jenkins setup complete" '${WaitHandleJenkins}'
+
+  InstanceSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Enable SSH access and HTTP from anywhere
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: !Ref SSHLocation
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: 0.0.0.0/0
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: e0c37b02-13aa-4fdd-a9c2-1d9f34498e8d
+  WaitHandleJenkins:
+    Type: 'AWS::CloudFormation::WaitConditionHandle'
+    Properties: {}
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 0681d00d-ab00-4aa4-ae46-17f473bb97f7
+  WaitConditionJenkins:
+    Type: 'AWS::CloudFormation::WaitCondition'
+    DependsOn: LaunchConfig
+    Properties:
+      Handle: !Ref WaitHandleJenkins
+      Timeout: '1200'

@@ -1,2 +1,3 @@
-# aws-ops
-AWS dev ops
+# AWS OPs
+
+This repo contains various useful AWS scripts / templates etc.
