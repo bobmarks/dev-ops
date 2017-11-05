@@ -166,7 +166,13 @@ Extra Steps
 
    Once terminated you can then re-create the stack like before but it should restore to the same 
    state.
+
+4. **Example Docker Compose**
+
+   Run these either via pipeline job or when SSH'd into instance.
    
+       git clone https://github.com/dockersamples/example-voting-app
+       sudo /usr/local/bin/docker-compose up -d
 
 Useful commands 
 ---------------
